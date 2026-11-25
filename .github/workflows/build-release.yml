@@ -1,0 +1,130 @@
+name: Build & Publish Merged Honk Geodata
+
+on:
+  schedule:
+    # 每天北京时间 00:00 (16:00 UTC) 与 12:00 (04:00 UTC) 自动构建发布
+    - cron: '0 4,16 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-release-geodata
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Fetch all 6 upstream rule sources
+        run: |
+          set -euo pipefail
+          mkdir -p work/Surfing/box_bll/clash/etc work/Surfing/box_bll/clash/rules dist
+
+          dl() {
+            local url="$1" out="$2"
+            echo "Downloading $url -> $out"
+            curl -fsSL --retry 4 --retry-delay 5 --retry-all-errors --max-time 180 -o "$out" "$url"
+          }
+
+          # 1. MetaCubeX/meta-rules-dat (base geosite/geoip + Surfing .mrs upstream)
+          dl "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat" "work/metacubex-geosite.dat"
+          dl "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"   "work/metacubex-geoip.dat"
+
+          # 2. GitMetaio/Surfing + AWAvenue-Ads-Rule
+          dl "https://raw.githubusercontent.com/GitMetaio/Surfing/main/box_bll/clash/etc/%E8%87%AA%E5%AE%9A%E4%B9%89%E8%A7%84%E5%88%99.list" "work/Surfing/box_bll/clash/etc/自定义规则.list"
+          dl "https://raw.githubusercontent.com/GitMetaio/Surfing/main/box_bll/clash/rules/WebRTC.list" "work/Surfing/box_bll/clash/rules/WebRTC.list"
+          dl "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/Filters/AWAvenue-Ads-Rule-Clash.yaml" "work/awavenue_ads.yaml"
+
+          # 3. Hackl0us/GeoIP2-CN + ispip.clang.cn (IPv6) + X-Shelby/geoip (IPv4+IPv6)
+          dl "https://raw.githubusercontent.com/Hackl0us/GeoIP2-CN/release/CN-ip-cidr.txt" "work/hackl0us_cn.txt"
+          dl "https://github.com/X-Shelby/geoip/releases/download/latest/cn_v4.txt" "work/shelby_cn_v4.txt"
+          dl "https://github.com/X-Shelby/geoip/releases/download/latest/cn_v6.txt" "work/shelby_cn_v6.txt"
+          if ! dl "https://ispip.clang.cn/all_cn_ipv6.txt" "work/clang_cn_v6.txt"; then
+            echo "::warning::ispip.clang.cn unreachable from runner; falling back to empty supplement (X-Shelby + MetaCubeX IPv6 still included)"
+            : > work/clang_cn_v6.txt
+          fi
+
+          # 4. blackmatrix7/ios_rule_script (sparse shallow clone of rule/Clash only)
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/blackmatrix7/ios_rule_script.git work/ios_rule_script
+          git -C work/ios_rule_script sparse-checkout set rule/Clash
+
+          ls -lh work/*.dat work/*.txt work/*.yaml
+
+      - name: Build deduplicated geosite.dat and geoip.dat
+        run: |
+          set -euo pipefail
+          TZ=Asia/Shanghai python3 scripts/build-geo.py \
+            --mcx-geosite work/metacubex-geosite.dat \
+            --mcx-geoip work/metacubex-geoip.dat \
+            --bm7-clash-dir work/ios_rule_script/rule/Clash \
+            --surfing-dir work/Surfing \
+            --awavenue-yaml work/awavenue_ads.yaml \
+            --hackl0us-cn work/hackl0us_cn.txt \
+            --clang-cn-v6 work/clang_cn_v6.txt \
+            --shelby-cn-v4 work/shelby_cn_v4.txt \
+            --shelby-cn-v6 work/shelby_cn_v6.txt \
+            --out-geosite dist/geosite.dat \
+            --out-geoip dist/geoip.dat \
+            --build-txt dist/BUILD.txt
+
+      - name: Verify geodata integrity and generate sha256sum
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-geo.py dist
+          (
+            cd dist
+            sha256sum geosite.dat > geosite.dat.sha256sum
+            sha256sum geoip.dat > geoip.dat.sha256sum
+            ls -lh
+            cat geosite.dat.sha256sum geoip.dat.sha256sum
+          )
+
+      - name: Publish rolling latest Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BUILD_TIME=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S CST')
+          {
+            echo "## Honk 6 源融合去重规则库（自动构建）"
+            echo ""
+            echo "- 构建时间：\`${BUILD_TIME}\`"
+            echo "- 定时计划：每天北京时间 \`00:00\` 与 \`12:00\` 自动触发"
+            echo ""
+            echo '```text'
+            cat dist/BUILD.txt
+            echo '```'
+          } > dist/RELEASE_NOTES.md
+
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest \
+              dist/geosite.dat \
+              dist/geosite.dat.sha256sum \
+              dist/geoip.dat \
+              dist/geoip.dat.sha256sum \
+              dist/BUILD.txt \
+              --clobber
+            gh release edit latest \
+              --title "Honk Merged Geodata (latest)" \
+              --notes-file dist/RELEASE_NOTES.md
+          else
+            gh release create latest \
+              dist/geosite.dat \
+              dist/geosite.dat.sha256sum \
+              dist/geoip.dat \
+              dist/geoip.dat.sha256sum \
+              dist/BUILD.txt \
+              --title "Honk Merged Geodata (latest)" \
+              --notes-file dist/RELEASE_NOTES.md
+          fi
