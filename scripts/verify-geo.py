@@ -53,6 +53,21 @@ assert len(ips["CN"]) > 8_000, f"geoip:CN unexpectedly small: {len(ips['CN'])}"
 assert len(ips["cn-v4"]) > 5_000, f"geoip:cn-v4 unexpectedly small: {len(ips['cn-v4'])}"
 assert len(ips["cn-v6"]) > 2_000, f"geoip:cn-v6 unexpectedly small: {len(ips['cn-v6'])}"
 
+import ipaddress
+
+cn_v4_nets = [ipaddress.IPv4Network((b, p)) for b, p in ips["cn-v4"]]
+cn_v6_nets = [ipaddress.IPv6Network((b, p)) for b, p in ips["cn-v6"]]
+
+def in_cn(ip_s: str) -> bool:
+    ip = ipaddress.ip_address(ip_s)
+    nets = cn_v4_nets if ip.version == 4 else cn_v6_nets
+    return any(ip in n for n in nets)
+
+for must_cn in ["223.5.5.5", "114.114.114.114", "119.29.29.29", "180.101.50.242", "240e::1", "2409:8000::1"]:
+    assert in_cn(must_cn), f"expected CN IP missing from geoip:CN: {must_cn}"
+for must_not_cn in ["8.8.8.8", "1.1.1.1", "149.154.167.50", "140.82.112.4", "104.21.89.181"]:
+    assert not in_cn(must_not_cn), f"overseas IP wrongly included in geoip:CN: {must_not_cn}"
+
 print(
     f"VERIFY PASSED: geosite={len(sites)} codes ({gs_path.stat().st_size:,} B, "
     f"merged-cn={len(sites['merged-cn'])}, merged-ads={len(sites['merged-ads'])}, "

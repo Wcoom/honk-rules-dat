@@ -8,6 +8,7 @@
   4. Hackl0us/GeoIP2-CN（CN-ip-cidr.txt IPv4）
   5. ispip.clang.cn/all_cn_ipv6.txt（大陆运营商 IPv6）
   6. X-Shelby/geoip（cn_v4.txt + cn_v6.txt）
+  7. IPinfo Lite 免费国家数据库（ipinfo_lite.csv.gz，按 country_code == CN 提取 IPv4+IPv6）
 
 去重与冲突消解：
   - 域名：规范化 + 精确去重 + 反转标签 Trie 后缀覆盖消除（母域覆盖子域与同域 full）
@@ -21,7 +22,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime
+import gzip
 import hashlib
 import ipaddress
 import os
@@ -555,6 +558,7 @@ def main() -> None:
     ap.add_argument("--clang-cn-v6", required=True, type=Path)
     ap.add_argument("--shelby-cn-v4", required=True, type=Path)
     ap.add_argument("--shelby-cn-v6", required=True, type=Path)
+    ap.add_argument("--ipinfo-lite-csv", type=Path, default=None, help="IPinfo Lite 数据库（.csv 或 .csv.gz），按 country_code==CN 提取 IPv4+IPv6")
     ap.add_argument("--out-geosite", required=True, type=Path)
     ap.add_argument("--out-geoip", required=True, type=Path)
     ap.add_argument("--build-txt", type=Path, default=None)
@@ -984,7 +988,7 @@ def main() -> None:
     )
 
     # ── 4. 融合并超网聚合去重 GeoIP ─────────────────────────────────────
-    print("[4/5] 融合并超网聚合去重 GeoIP（含 6 源大陆 IPv4+IPv6）...")
+    print("[4/5] 融合并超网聚合去重 GeoIP（含 7 源大陆 IPv4+IPv6）...")
     merged_ips: dict[str, list[tuple[bytes, int]]] = {}
     ip_report: list[str] = []
 
@@ -1024,10 +1028,36 @@ def main() -> None:
     build_ip_bucket("merged-webrtc-ip", bm7_bucket_ips.get("merged-webrtc", []), public_only=True)
     build_ip_bucket("merged-ads-ip", bm7_bucket_ips.get("merged-ads", []), public_only=True)
 
-    # 4.2 大陆全量 IPv4 + IPv6（6 源融合 + 超网聚合 + 强海外服务 IP 防冲突扣减）
+    # 4.2 大陆全量 IPv4 + IPv6（7 源融合 + 超网聚合 + 强海外服务 IP 防冲突扣减）
     def read_cidr_file(p: Path) -> list[str]:
         _, cidrs = parse_rule_text(p.read_text(encoding="utf-8", errors="replace"), "auto")
         return cidrs
+
+    def read_ipinfo_lite_cn(p: Path | None) -> list[str]:
+        if p is None or not p.exists() or p.stat().st_size == 0:
+            return []
+        opener = gzip.open if p.suffix == ".gz" else open
+        cidrs: list[str] = []
+        with opener(p, "rt", encoding="utf-8", errors="replace") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if not header:
+                return []
+            try:
+                net_i = header.index("network")
+                cc_i = header.index("country_code")
+            except ValueError:
+                return []
+            for row in reader:
+                if len(row) > cc_i and row[cc_i] == "CN":
+                    net_s = row[net_i].strip()
+                    if net_s:
+                        cidrs.append(net_s)
+        return cidrs
+
+    ipinfo_cn_cidrs = read_ipinfo_lite_cn(args.ipinfo_lite_csv)
+    if args.ipinfo_lite_csv is not None:
+        print(f"  IPinfo Lite CN 提取: {len(ipinfo_cn_cidrs):,} 条 CIDR（仅按国家码 CN 筛选）")
 
     _, bm7_chinaips_cidrs = get_bm7("ChinaIPs")
     cn_raw_cidrs = (
@@ -1036,6 +1066,7 @@ def main() -> None:
         + read_cidr_file(args.shelby_cn_v4)
         + read_cidr_file(args.shelby_cn_v6)
         + read_cidr_file(args.clang_cn_v6)
+        + ipinfo_cn_cidrs
         + bm7_chinaips_cidrs
         + bm7_bucket_ips.get("merged-cn", [])
         + bm7_bucket_ips.get("merged-chinamedia", [])
@@ -1094,6 +1125,7 @@ def main() -> None:
             "  - Hackl0us/GeoIP2-CN (CN-ip-cidr.txt)",
             "  - ispip.clang.cn/all_cn_ipv6.txt",
             "  - X-Shelby/geoip (cn_v4.txt + cn_v6.txt)",
+            f"  - IPinfo Lite (country_code==CN, {len(ipinfo_cn_cidrs):,} raw CIDRs)" if ipinfo_cn_cidrs else "  - IPinfo Lite (skipped)",
             f"geosite.dat: {gs_sz} bytes ({len(out_sites)} codes) sha256={gs_sha}",
             f"geoip.dat: {gi_sz} bytes ({len(out_ips)} codes) sha256={gi_sha}",
             "",

@@ -26,7 +26,9 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Fetch all 6 upstream rule sources
+      - name: Fetch all 7 upstream rule sources
+        env:
+          IPINFO_TOKEN: ${{ secrets.IPINFO_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p work/Surfing/box_bll/clash/etc work/Surfing/box_bll/clash/rules dist
@@ -51,19 +53,34 @@ jobs:
           dl "https://github.com/X-Shelby/geoip/releases/download/latest/cn_v4.txt" "work/shelby_cn_v4.txt"
           dl "https://github.com/X-Shelby/geoip/releases/download/latest/cn_v6.txt" "work/shelby_cn_v6.txt"
           if ! dl "https://ispip.clang.cn/all_cn_ipv6.txt" "work/clang_cn_v6.txt"; then
-            echo "::warning::ispip.clang.cn unreachable from runner; falling back to empty supplement (X-Shelby + MetaCubeX IPv6 still included)"
+            echo "::warning::ispip.clang.cn unreachable from runner; falling back to empty supplement (X-Shelby + MetaCubeX + IPinfo Lite IPv6 still included)"
             : > work/clang_cn_v6.txt
           fi
 
-          # 4. blackmatrix7/ios_rule_script (sparse shallow clone of rule/Clash only)
+          # 4. IPinfo Lite free country database (token via Authorization header, never in URL/logs)
+          if [ -n "${IPINFO_TOKEN:-}" ]; then
+            echo "Downloading IPinfo Lite (ipinfo_lite.csv.gz) via Bearer token -> work/ipinfo_lite.csv.gz"
+            curl -fsSL --retry 4 --retry-delay 5 --retry-all-errors --max-time 180 \
+              -H "Authorization: Bearer ${IPINFO_TOKEN}" \
+              -o "work/ipinfo_lite.csv.gz" \
+              "https://ipinfo.io/data/ipinfo_lite.csv.gz"
+          else
+            echo "::warning::IPINFO_TOKEN secret not set; skipping IPinfo Lite"
+          fi
+
+          # 5. blackmatrix7/ios_rule_script (sparse shallow clone of rule/Clash only)
           git clone --depth 1 --filter=blob:none --sparse https://github.com/blackmatrix7/ios_rule_script.git work/ios_rule_script
           git -C work/ios_rule_script sparse-checkout set rule/Clash
 
-          ls -lh work/*.dat work/*.txt work/*.yaml
+          ls -lh work/*.dat work/*.txt work/*.yaml work/*.gz 2>/dev/null || true
 
       - name: Build deduplicated geosite.dat and geoip.dat
         run: |
           set -euo pipefail
+          EXTRA_ARGS=()
+          if [ -s work/ipinfo_lite.csv.gz ]; then
+            EXTRA_ARGS+=(--ipinfo-lite-csv work/ipinfo_lite.csv.gz)
+          fi
           TZ=Asia/Shanghai python3 scripts/build-geo.py \
             --mcx-geosite work/metacubex-geosite.dat \
             --mcx-geoip work/metacubex-geoip.dat \
@@ -74,6 +91,7 @@ jobs:
             --clang-cn-v6 work/clang_cn_v6.txt \
             --shelby-cn-v4 work/shelby_cn_v4.txt \
             --shelby-cn-v6 work/shelby_cn_v6.txt \
+            "${EXTRA_ARGS[@]}" \
             --out-geosite dist/geosite.dat \
             --out-geoip dist/geoip.dat \
             --build-txt dist/BUILD.txt
@@ -113,7 +131,7 @@ jobs:
           set -euo pipefail
           BUILD_TIME=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S CST')
           {
-            echo "## Honk 6 源融合去重规则库（自动构建）"
+            echo "## Honk 7 源融合去重规则库（自动构建）"
             echo ""
             echo "- 构建时间：\`${BUILD_TIME}\`"
             echo "- 定时计划：每天北京时间 \`00:00\` 与 \`12:00\` 自动触发"
