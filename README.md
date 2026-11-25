@@ -13,11 +13,14 @@
 
 ## 自动发布计划
 
-- **GitHub Actions**：每天北京时间 **`00:00`** 与 **`12:00`**（UTC `0 4,16 * * *`）自动拉取 6 个上游源、执行 Trie 域名覆盖去重 + CIDR 超网聚合 + 跨桶冲突扣减 + 完整性校验，并自动覆盖发布到 `latest` Release（附 `.sha256sum`）。
+- **GitHub Actions**：每天北京时间 **`00:00`** 与 **`12:00`**（UTC `0 4,16 * * *`）自动拉取 6 个上游源、执行 Trie 域名覆盖去重 + CIDR 超网聚合 + 跨桶冲突扣减 + 完整性校验，并同步发布到两个通道：
+  1. **直链通道（`release` 单提交 orphan 分支，HTTP 200 无重定向，供 `honk` 直接拉取）**：
+     - `geosite.dat`: `https://raw.githubusercontent.com/Wcoom/honk-rules-dat/release/geosite.dat`
+     - `geoip.dat`: `https://raw.githubusercontent.com/Wcoom/honk-rules-dat/release/geoip.dat`
+     - jsDelivr CDN 镜像：`https://fastly.jsdelivr.net/gh/Wcoom/honk-rules-dat@release/{geosite,geoip}.dat`
+     - 校验文件（`honk` 自动拉取验证）：同名 `.sha256sum`
+  2. **Release 通道（`latest` Release，方便网页/手动下载）**：
+     - `https://github.com/Wcoom/honk-rules-dat/releases/tag/latest`
 - 也可在 Actions 页面点击 `Run workflow` 随时手动触发。
 
-## 固定拉取地址（`honk` `assets.geodata`）
-
-- `geosite.dat`: `https://github.com/Wcoom/honk-rules-dat/releases/download/latest/geosite.dat`
-- `geoip.dat`: `https://github.com/Wcoom/honk-rules-dat/releases/download/latest/geoip.dat`
-- 校验文件（`honk` 自动拉取验证）：同名 `.sha256sum`
+> 注：`honk` 的 `geodata` 下载器刻意不跟随 HTTP 302 重定向，因此 `assets.geodata` 必须配置 `raw.githubusercontent.com/.../release/...`（或 `fastly.jsdelivr.net`）直链，不能填写会 302 跳转的 GitHub Releases 下载地址。

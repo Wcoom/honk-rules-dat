@@ -90,6 +90,22 @@ jobs:
             cat geosite.dat.sha256sum geoip.dat.sha256sum
           )
 
+      - name: Publish direct-download orphan release branch (HTTP 200, no redirect)
+        run: |
+          set -euo pipefail
+          BUILD_TIME=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S CST')
+          rm -rf release-stage
+          mkdir -p release-stage
+          cp dist/geosite.dat dist/geosite.dat.sha256sum dist/geoip.dat dist/geoip.dat.sha256sum dist/BUILD.txt release-stage/
+          cd release-stage
+          git init -b release
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add geosite.dat geosite.dat.sha256sum geoip.dat geoip.dat.sha256sum BUILD.txt
+          git commit -m "chore(release): publish merged geodata (${BUILD_TIME})"
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git push --force origin release:release
+
       - name: Publish rolling latest Release
         env:
           GH_TOKEN: ${{ github.token }}
